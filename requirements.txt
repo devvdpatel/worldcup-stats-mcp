@@ -1,0 +1,9 @@
+# Install with:  pip install --prefer-binary -r requirements.txt
+# (--prefer-binary avoids an unnecessary source build of `cryptography` on macOS)
+soccerdata==1.9.0
+duckdb==1.5.3
+mcp[cli]==1.27.2
+anthropic==0.109.1
+python-dotenv==1.2.2
+pandas==3.0.3
+cryptography==48.0.1
