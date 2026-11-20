@@ -69,14 +69,14 @@ pt AS (   -- player-team-window
 ),
 agg AS (  -- player-window (a player traded inside a window has several team rows)
     SELECT league, "window", player_id,
-           sum(minutes_played)              AS minutes,
-           sum(goals)                       AS goals,
-           sum(primary_assists)             AS assists,
-           sum(shots)                       AS shots,
-           sum(shots_on_target)             AS shots_on_target,
+           sum(minutes_played)::INTEGER              AS minutes,
+           sum(goals)::INTEGER                       AS goals,
+           sum(primary_assists)::INTEGER             AS assists,
+           sum(shots)::INTEGER                       AS shots,
+           sum(shots_on_target)::INTEGER             AS shots_on_target,
            sum(xgoals)                      AS xg,
            sum(xassists)                    AS xa,
-           sum(key_passes)                  AS key_passes,
+           sum(key_passes)::INTEGER                  AS key_passes,
            sum(goals_added)                 AS goals_added,
            sum(goals_added_raw)             AS goals_added_raw,
            arg_max(team_id, minutes_played) AS team_id,
@@ -121,7 +121,7 @@ SELECT
     p.birth_date::DATE                                  AS birth_date,
     floor(date_diff('day', p.birth_date::DATE, w.start_date) / 365.25)::INTEGER AS age,
     a.minutes,
-    coalesce(gm.games, 0)                               AS games,
+    coalesce(gm.games, 0)::INTEGER                      AS games,
     gm.first_game_date,
     gm.last_game_date,
     a.goals, a.assists, a.shots, a.shots_on_target, a.xg, a.xa, a.key_passes,
@@ -138,6 +138,18 @@ LEFT JOIN stg_asa_teams t   ON t.league = a.league AND t.team_id = a.team_id
 LEFT JOIN season_pos sp     ON sp.league = a.league AND sp.player_id = a.player_id
 LEFT JOIN games gm          ON gm.league = a.league AND gm."window" = a."window" AND gm.player_id = a.player_id
 LEFT JOIN wc                ON wc.league = a.league AND wc.player_id = a.player_id
+"""
+
+
+# filter-friendly columns that are identical on a player's pre and post rows
+ENRICH_WINDOW_SQL = """
+CREATE OR REPLACE TABLE mls_player_window AS
+SELECT *,
+       last_value(club) OVER (PARTITION BY league, asa_player_id ORDER BY window_order
+                              ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS club_latest,
+       player_name || ' (' || last_value(club) OVER (PARTITION BY league, asa_player_id ORDER BY window_order
+                              ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) || ')' AS player_label
+FROM mls_player_window
 """
 
 
@@ -197,14 +209,15 @@ SELECT
     pre.club                                            AS club_pre,
     post.club                                           AS club_post,
     coalesce(post.club, pre.club)                       AS club,
+    coalesce(post.player_label, pre.player_label)       AS player_label,
     coalesce(post.asa_team_id, pre.asa_team_id)         AS asa_team_id,
     CASE WHEN pre.asa_player_id IS NOT NULL AND post.asa_player_id IS NOT NULL THEN 'both windows'
          WHEN post.asa_player_id IS NOT NULL THEN 'post only (arrived after the break)'
          ELSE 'pre only (no minutes after the break)' END AS window_coverage,
-    coalesce(pre.minutes, 0)                            AS pre_minutes,
-    coalesce(post.minutes, 0)                           AS post_minutes,
-    coalesce(pre.games, 0)                              AS pre_games,
-    coalesce(post.games, 0)                             AS post_games,
+    coalesce(pre.minutes, 0)::INTEGER                   AS pre_minutes,
+    coalesce(post.minutes, 0)::INTEGER                  AS post_minutes,
+    coalesce(pre.games, 0)::INTEGER                     AS pre_games,
+    coalesce(post.games, 0)::INTEGER                    AS post_games,
     coalesce(pre.meets_min_minutes, false)              AS pre_meets_min_minutes,
     coalesce(post.meets_min_minutes, false)             AS post_meets_min_minutes,
     coalesce(pre.meets_min_minutes AND post.meets_min_minutes, false) AS meets_min_minutes_both,
@@ -236,7 +249,8 @@ def player_percentiles_sql() -> str:
     """Long table: one row per (league, window, player, KPI) for min-minutes players.
     Peers = same league, window and ASA season position; goalkeepers only get goals_added."""
     long = "\n    UNION ALL\n    ".join(
-        f"SELECT league, \"window\", window_order, asa_player_id, player_name, club, position, "
+        f"SELECT league, \"window\", window_order, asa_player_id, player_name, player_label, club, "
+        f"club_latest, position, "
         f"position_group, world_cup_player, minutes, '{k}' AS kpi, {i + 1} AS kpi_order, "
         f"{k}_p90 AS value_p90 FROM mls_player_window WHERE meets_min_minutes"
         for i, k in enumerate(KPIS)
@@ -322,6 +336,7 @@ def build(con: duckdb.DuckDBPyConnection | None = None, min_minutes: int = confi
         con = duckdb.connect(str(config.DUCKDB_PATH))
     try:
         con.execute(player_window_sql(min_minutes))
+        con.execute(ENRICH_WINDOW_SQL)
         con.execute(wc_rounds_sql(season))
         con.execute(player_change_sql(min_minutes, season))
         con.execute(player_percentiles_sql())

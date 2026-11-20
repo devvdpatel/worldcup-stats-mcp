@@ -45,6 +45,7 @@ def _rows(con, sql, params=None):
     ("player_xref", "season, fbref_player_id"),
     ("mls_player_window", "league, \"window\", asa_player_id"),
     ("mls_player_change", "league, asa_player_id"),
+    ("mls_player_change", "league, player_label"),
 ])
 def test_unique_keys(con, table, key):
     _need(con, table)

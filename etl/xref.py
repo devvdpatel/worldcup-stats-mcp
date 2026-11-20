@@ -372,6 +372,15 @@ def build(con: duckdb.DuckDBPyConnection | None = None, season: str = config.CUR
             "SELECT league, team_id, team_name, team_short_name, team_abbreviation FROM stg_asa_teams").df()
         x = match_players(wc, asa_players, asa_player_teams, asa_teams, load_overrides())
         x.insert(0, "season", season)
+        # explicit types: all-empty columns would otherwise be inferred as INTEGER
+        for col in ("review_reason", "override", "override_note", "match_method", "asa_league",
+                    "asa_player_id", "asa_player_name", "asa_nationality", "asa_teams_2026",
+                    "fbref_club_asa_team_id", "fbref_club_league"):
+            if col in x:
+                x[col] = x[col].astype("string")
+        for col in ("fbref_club_tier", "fbref_birth_year", "asa_birth_year", "wc_minutes", "n_candidates"):
+            if col in x:
+                x[col] = pd.to_numeric(x[col], errors="coerce").astype("Int64")
         con.register("_x", x)
         con.execute("CREATE OR REPLACE TABLE player_xref AS SELECT * FROM _x")
         con.unregister("_x")
