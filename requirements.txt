@@ -10,3 +10,5 @@ cryptography==48.0.1
 # American Soccer Analysis API client (MLS / MLS NEXT Pro xG and goals added)
 itscalledsoccer==2.3.0
 polars==2.1.0
+# tests (python -m pytest)
+pytest==9.1.1
