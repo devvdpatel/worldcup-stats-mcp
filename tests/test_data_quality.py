@@ -233,3 +233,23 @@ def test_exports_match_their_mart(con, table):
     assert all(re.fullmatch(r"[a-z][a-z0-9_]*", col) for col in c.columns)
     if xlsx.exists():
         assert len(pd.read_excel(xlsx)) == n
+
+
+# ------------------------------------------------------------------ docs
+@pytest.mark.parametrize("table", ["mls_player_window", "mls_player_change", "mls_player_percentiles",
+                                   "mls_team_window", "wc_nation_rounds", "player_xref"])
+def test_data_dictionary_documents_every_column(con, table):
+    import re
+    _need(con, table)
+    doc = (config.PROJECT_ROOT / "docs" / "data_dictionary.md").read_text()
+    heading = re.search(rf"^#+ .*`{table}`.*$", doc, re.M)
+    assert heading, f"no heading for {table} in docs/data_dictionary.md"
+    section = re.split(r"^#+ ", doc[heading.end():], maxsplit=1, flags=re.M)[0]
+    documented = set(re.findall(r"`([a-z0-9_<>]+)`", section))
+    # expand `pre_<kpi>_p90` style patterns
+    kpis = ["goals", "assists", "shots", "xg", "xa", "goals_added"]
+    for pat in [d for d in documented if "<kpi>" in d]:
+        documented |= {pat.replace("<kpi>", k) for k in kpis}
+    cols = [r[0] for r in _rows(con, f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table}'")]
+    missing = [c for c in cols if c not in documented]
+    assert not missing, f"{table}: undocumented columns {missing}"
