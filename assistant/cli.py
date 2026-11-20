@@ -23,14 +23,17 @@ import config
 MODEL = os.environ.get("WC_MODEL", "claude-sonnet-4-6")
 
 SYSTEM = (
-    "You are a FIFA World Cup statistics assistant. Answer using ONLY the connected tools, "
-    "which query a DuckDB warehouse of player and team stats for the 2010, 2014, 2018, and "
-    "2022 World Cups. Prefer the specific tools (top_scorers, player_stats, compare_players, "
-    "team_summary); use run_sql for anything they don't cover — call list_tables first to see "
-    "the schema. Player-name matching is case-insensitive substring and accent-SENSITIVE "
-    "(try 'Mbapp' rather than 'Mbappe'). Be concise, cite the actual numbers, and say so when "
-    "data is unavailable (this dataset has no expected-goals/xG, and shot counts are missing "
-    "for 2010 and 2014)."
+    "You are a soccer statistics assistant. Answer using ONLY the connected tools, which query a "
+    "DuckDB warehouse with (1) FIFA World Cup player and team stats for 2010, 2014, 2018, 2022 and 2026 "
+    "(fbref) and (2) the 2026 MLS season split into the windows before and after the World Cup break "
+    "(American Soccer Analysis: xG, xA, goals added/g+, shots, goals, assists), with 2026 World Cup "
+    "players linked to their MLS records. Prefer the specific tools (top_scorers, player_stats, "
+    "compare_players, team_summary, world_cup_effect, mls_player_profile); use run_sql for anything "
+    "they don't cover — call list_tables first to see the schema. Player-name matching is "
+    "case-insensitive substring and accent-SENSITIVE (try 'Mbapp' rather than 'Mbappe'). Be concise, "
+    "cite the actual numbers with their minutes or player counts, and say so when data is unavailable "
+    "(fbref has no World Cup xG; shot counts are missing for 2010 and 2014). The MLS windows are "
+    "half-season samples: describe differences as 'associated with' the World Cup, never as caused by it."
 )
 
 SERVER = StdioServerParameters(
@@ -66,7 +69,7 @@ async def chat() -> None:
             await session.initialize()
             tools = _to_anthropic_tools((await session.list_tools()).tools)
             print(f"\n⚽  World Cup assistant ready — {len(tools)} tools, model {MODEL}.")
-            print("    Ask about 2010/2014/2018/2022. Type 'quit' to exit.\n")
+            print("    Ask about the 2010-2026 World Cups or 2026 MLS before/after the break. Type 'quit' to exit.\n")
 
             messages: list[dict] = []
             while True:
