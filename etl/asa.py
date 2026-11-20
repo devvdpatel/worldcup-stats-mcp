@@ -24,7 +24,8 @@ so a UTC-vs-local date difference can't drop a boundary game; the 52-day gap mak
 Tables (all carry `league`; stat tables carry `window` in {season, pre, post}):
   stg_asa_windows, stg_asa_teams, stg_asa_players, stg_asa_games,
   stg_asa_player_xgoals, stg_asa_player_goals_added,
-  stg_asa_goalkeeper_goals_added, stg_asa_team_xgoals
+  stg_asa_goalkeeper_goals_added, stg_asa_team_xgoals,
+  stg_asa_player_games (season only: one row per player per game, with game_date_utc)
 """
 from __future__ import annotations
 
@@ -99,6 +100,26 @@ class CachedASA:
         """players / teams for ONE league (paginated by the client's _execute_query)."""
         df = self.client._execute_query(f"{self.client.base_url}{league}/{kind}", {})
         return _to_pandas(df)
+
+    def fetch_all(self, path: str, params: dict) -> pd.DataFrame:
+        """GET every row of an endpoint, paging with `offset` past any server cap.
+
+        The client only pages when a response has exactly 1,000 rows, but some endpoints
+        (e.g. players/xgoals with split_by_games) cap at 10,000, which it silently
+        truncates. Here: keep paging while pages come back as full as the first one.
+        """
+        url = f"{self.client.base_url}{path}"
+        rows = self.get_json(url, params)
+        page_size = len(rows)
+        if page_size >= self.client.MAX_API_LIMIT:
+            offset = page_size
+            while True:
+                page = self.get_json(url, {**params, "offset": str(offset)})
+                rows += page
+                offset += len(page)
+                if len(page) < page_size:
+                    break
+        return pd.DataFrame(rows)
 
 
 def _to_pandas(df) -> pd.DataFrame:
@@ -242,7 +263,14 @@ def fetch_league(api: CachedASA, league: str, wc_start: dt.date, wc_end: dt.date
         "stg_asa_goalkeeper_goals_added": _flatten_goals_added(by_window(
             lambda **kw: c.get_goalkeeper_goals_added(leagues=league, split_by_teams=True, **kw))),
         "stg_asa_team_xgoals": by_window(lambda **kw: c.get_team_xgoals(leagues=league, **kw)),
+        # one row per player per game (minutes): appearances per window + first game back
+        "stg_asa_player_games": _clean(api.fetch_all(f"{league}/players/xgoals", {
+            "season_name": season, "stage_name": stage, "split_by_games": "true"}), league),
     }
+    pg = out["stg_asa_player_games"]
+    if not pg.empty:
+        dates = games.set_index("game_id")["game_date_utc"]
+        pg["game_date_utc"] = pg["game_id"].map(dates)
     # players dimension: only players who appear in this season's stats
     ids = set(out["stg_asa_player_xgoals"]["player_id"]) | set(out["stg_asa_player_goals_added"]["player_id"])
     ids |= set(out["stg_asa_goalkeeper_goals_added"].get("player_id", pd.Series(dtype=str)))
