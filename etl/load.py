@@ -45,6 +45,12 @@ def flatten(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    return bool(con.execute(
+        "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [table]
+    ).fetchone()[0])
+
+
 def load_dataframe(df: pd.DataFrame, table: str, con: duckdb.DuckDBPyConnection | None = None) -> int:
     """Replace `table` in DuckDB with the contents of `df`. Returns the row count."""
     own = con is None
@@ -58,3 +64,41 @@ def load_dataframe(df: pd.DataFrame, table: str, con: duckdb.DuckDBPyConnection 
     finally:
         if own:
             con.close()
+
+
+def upsert_partitions(
+    df: pd.DataFrame,
+    table: str,
+    con: duckdb.DuckDBPyConnection,
+    key: str = "season",
+) -> int:
+    """Replace only the `key` partitions present in `df`, keeping every other partition.
+
+    `python -m etl.pipeline --seasons 2026` therefore refreshes 2026 without wiping
+    2010-2022. Rows are combined with UNION ALL BY NAME, so a season with fewer
+    columns (fbref dropped its Opta-sourced stats in Jan 2026) gets NULLs, and a
+    season with new columns (2026 adds `club`) widens the table.
+    Returns the table's total row count.
+    """
+    if not table_exists(con, table):
+        return load_dataframe(df, table, con)
+    keys = sorted({str(k) for k in df[key].dropna().unique()})
+    con.register("_src", df)
+    try:
+        con.execute("BEGIN TRANSACTION")
+        con.execute(
+            f'CREATE OR REPLACE TEMP TABLE _merged AS '
+            f'SELECT * FROM "{table}" WHERE CAST("{key}" AS VARCHAR) NOT IN '
+            f'(SELECT unnest(?::VARCHAR[])) '
+            f'UNION ALL BY NAME SELECT * FROM _src',
+            [keys],
+        )
+        con.execute(f'CREATE OR REPLACE TABLE "{table}" AS SELECT * FROM _merged')
+        con.execute("DROP TABLE _merged")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
+    finally:
+        con.unregister("_src")
+    return con.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]

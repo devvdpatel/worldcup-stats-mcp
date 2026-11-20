@@ -20,7 +20,10 @@ jobs:
         run: pip install --prefer-binary -r requirements.txt
 
       - name: Byte-compile (syntax check)
-        run: python -m compileall config.py etl mcp_server assistant
+        run: python -m compileall config.py etl analysis mcp_server assistant tests
 
       - name: Import smoke test
-        run: python -c "import config, etl.load, etl.model, mcp_server.server, assistant.cli; print('imports OK')"
+        run: python -c "import config, etl.load, etl.model, etl.extract, etl.fbref_meta, etl.asa, etl.xref, etl.mls_model, etl.export, analysis.findings, mcp_server.server, assistant.cli; print('imports OK')"
+
+      - name: Tests (unit tests; warehouse data-quality tests skip without data/)
+        run: python -m pytest
