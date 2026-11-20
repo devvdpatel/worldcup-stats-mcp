@@ -22,7 +22,7 @@ Outputs:
                          with World Cup and pre/post MLS minutes as evidence. `decision` and
                          `note` typed into it survive re-runs.
   reference/player_match_overrides.csv (tracked, optional) - hand decisions:
-                         fbref_player_id, asa_player_id, decision (accept|reject), note.
+                         fbref_player_id, asa_player_id, decision (accept|reject|dismiss), note.
 """
 from __future__ import annotations
 
@@ -37,6 +37,11 @@ import pandas as pd
 import config
 
 ACCEPT_AT = 0.85          # minimum confidence for a link to set world_cup_player
+# hand decisions (reference/player_match_overrides.csv `decision` column):
+#   accept  - link this World Cup player to asa_player_id (or to the matcher's candidate)
+#   reject  - not this candidate (asa_player_id); a different future candidate is reviewed again
+#   dismiss - reviewed, no ASA match exists; drop from the review file while still unmatched
+OVERRIDE_DECISIONS = ("accept", "reject", "dismiss")
 REVIEW_BELOW = 0.95       # links below this confidence are written to the review file
 MIN_NAME_SIM = 0.80       # candidates below this name similarity are never linked
 
@@ -243,13 +248,19 @@ def _finalize(x: pd.DataFrame, overrides: pd.DataFrame | None = None) -> pd.Data
     x["override_note"] = None
     if overrides is not None and not overrides.empty:
         for o in overrides.itertuples():
-            m = x["fbref_player_id"].eq(o.fbref_player_id)
             decision = str(o.decision).strip().lower()
-            if decision not in ("accept", "reject"):
+            if decision not in OVERRIDE_DECISIONS:
                 continue
+            new_id = o.asa_player_id if isinstance(o.asa_player_id, str) else ""
+            m = x["fbref_player_id"].eq(o.fbref_player_id)
+            if decision == "reject" and new_id:
+                # a reject is about one candidate: if a rebuild proposes someone else, review again
+                m &= x["asa_player_id"].eq(new_id)
+            elif decision == "dismiss":
+                # "no ASA match, stop asking": only while the matcher still finds no candidate
+                m &= x["asa_player_id"].isna() if not new_id else x["asa_player_id"].eq(new_id)
             x.loc[m, "override"] = decision
             x.loc[m, "override_note"] = getattr(o, "note", None) or None
-            new_id = o.asa_player_id if isinstance(o.asa_player_id, str) else ""
             if decision == "accept" and new_id and m.any() and (x.loc[m, "asa_player_id"] != new_id).any():
                 # hand-picked a different ASA player: the matcher's evidence no longer applies
                 x.loc[m, "asa_player_id"] = new_id
@@ -259,13 +270,13 @@ def _finalize(x: pd.DataFrame, overrides: pd.DataFrame | None = None) -> pd.Data
                     if col in x:
                         x[col] = x[col].astype(object)   # pandas 3: typed columns reject None
                         x.loc[m, col] = None
-    x["is_accepted"] = (linked & ~x["ambiguous"] & ~x["conflict"] & x["override"].ne("reject")) | \
-        x["override"].eq("accept")
+    x["is_accepted"] = (linked & ~x["ambiguous"] & ~x["conflict"]
+                        & ~x["override"].isin(["reject", "dismiss"])) | x["override"].eq("accept")
 
     def reason(r) -> str | None:
         us_club = r.fbref_club_country == "United States"
         mls_club = us_club and pd.notna(r.fbref_club_tier) and int(r.fbref_club_tier) == 1
-        if r.override in ("accept", "reject"):
+        if r.override in OVERRIDE_DECISIONS:
             return None
         if r.match_method == "unmatched" or pd.isna(r.asa_player_id):
             if mls_club:

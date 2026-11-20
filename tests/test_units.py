@@ -103,6 +103,40 @@ def test_override_reject_wins():
     assert not x.iloc[0]["is_accepted"]
 
 
+def _wc_row(fid="c1"):
+    return pd.DataFrame([(fid, "Luis Suárez", "Colombia", "Sporting CP", "Portugal", 1, 1997)],
+                        columns=["fbref_player_id", "player", "team", "club", "club_country", "club_tier",
+                                 "birth_year"])
+
+
+def _asa(pid="a1"):
+    ap = pd.DataFrame([("mls", pid, "Luis Suárez", "Uruguay", "1987-01-24")],
+                      columns=["league", "player_id", "player_name", "nationality", "birth_date"])
+    pt = pd.DataFrame([("mls", pid, "t2")], columns=["league", "player_id", "team_id"])
+    return ap, pt
+
+
+def test_reject_only_applies_to_the_rejected_candidate():
+    ov = pd.DataFrame([{"fbref_player_id": "c1", "asa_player_id": "a1", "decision": "reject", "note": ""}])
+    teams = MLS_TEAMS.assign(league="mls")
+    same = xref.match_players(_wc_row(), *_asa("a1"), teams, ov).iloc[0]
+    assert same["override"] == "reject" and not same["needs_review"]
+    other = xref.match_players(_wc_row(), *_asa("a2"), teams, ov).iloc[0]   # new candidate
+    assert pd.isna(other["override"]) and other["needs_review"]
+
+
+def test_dismiss_hides_an_unmatched_player_until_a_candidate_appears():
+    ov = pd.DataFrame([{"fbref_player_id": "c1", "asa_player_id": "", "decision": "dismiss", "note": ""}])
+    wc = _wc_row().assign(club="Miami FC", club_country="United States", club_tier=2)
+    teams = MLS_TEAMS.assign(league="mls")
+    empty_ap = pd.DataFrame(columns=["league", "player_id", "player_name", "nationality", "birth_date"])
+    empty_pt = pd.DataFrame(columns=["league", "player_id", "team_id"])
+    none = xref.match_players(wc, empty_ap, empty_pt, teams, ov).iloc[0]
+    assert none["override"] == "dismiss" and not none["needs_review"] and not none["is_accepted"]
+    later = xref.match_players(wc, *_asa("a1"), teams, ov).iloc[0]          # a candidate shows up
+    assert pd.isna(later["override"]) and later["needs_review"]
+
+
 def test_override_accept_keeps_note_and_clears_evidence_for_a_different_player():
     ov = pd.DataFrame([{"fbref_player_id": "c1", "asa_player_id": "a9", "decision": "accept",
                         "note": "hand-verified"}])
