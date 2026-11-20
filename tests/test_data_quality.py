@@ -146,3 +146,89 @@ def test_world_cup_dates_come_from_the_fbref_schedule(con):
                [config.CURRENT_SEASON])[0]
     win = _rows(con, "SELECT DISTINCT world_cup_start, world_cup_end FROM stg_asa_windows")
     assert win == [wc]
+
+
+# ------------------------------------------------------------------ ASA completeness
+def test_per_game_minutes_add_up_to_season_minutes(con):
+    """Catches truncated per-game pulls (the ASA client stops at a 10,000-row cap).
+    Exact for MLS; ASA's MLS NEXT Pro per-game rows are ~0.5% short for two teams."""
+    _need(con, "stg_asa_player_games", "stg_asa_player_xgoals")
+    rows = _rows(con, """
+        WITH g AS (SELECT league, sum(minutes_played) AS m FROM stg_asa_player_games GROUP BY 1),
+             s AS (SELECT league, sum(minutes_played) AS m FROM stg_asa_player_xgoals
+                   WHERE "window" = 'season' GROUP BY 1)
+        SELECT league, g.m, s.m FROM g JOIN s USING (league)""")
+    for league, game_min, season_min in rows:
+        if league == "mls":
+            assert game_min == season_min, f"mls per-game {game_min} vs season {season_min}"
+        else:
+            assert game_min <= season_min and game_min >= 0.99 * season_min, (league, game_min, season_min)
+
+
+# ------------------------------------------------------------------ marts
+def test_world_cup_rounds_have_a_48_team_shape(con):
+    _need(con, "wc_nation_rounds")
+    got = dict(_rows(con, "SELECT round_reached, count(*) FROM wc_nation_rounds GROUP BY 1"))
+    assert got == {"Group stage": 16, "Round of 32": 16, "Round of 16": 8, "Quarter-finals": 4,
+                   "Fourth place": 1, "Third place": 1, "Runner-up": 1, "Champion": 1}
+
+
+def test_change_deltas_equal_post_minus_pre(con):
+    _need(con, "mls_player_change")
+    for k in ("goals", "assists", "shots", "xg", "xa", "goals_added"):
+        bad = _rows(con, f"""SELECT count(*) FROM mls_player_change
+                             WHERE abs(delta_{k}_p90 - (post_{k}_p90 - pre_{k}_p90)) > 1e-9
+                                OR (delta_{k}_p90 IS NULL) <> (pre_{k}_p90 IS NULL OR post_{k}_p90 IS NULL)""")[0][0]
+        assert bad == 0, k
+
+
+def test_window_minutes_match_staging(con):
+    _need(con, "mls_player_window", "stg_asa_player_xgoals")
+    rows = _rows(con, """
+        SELECT a.league, a."window", a.m, b.m FROM
+          (SELECT league, "window", sum(minutes) AS m FROM mls_player_window GROUP BY ALL) a
+          JOIN (SELECT league, "window", sum(minutes_played) AS m FROM stg_asa_player_xgoals
+                WHERE "window" IN ('pre', 'post') GROUP BY ALL) b USING (league, "window")""")
+    assert rows and all(r[2] == r[3] for r in rows), rows
+
+
+def test_percentiles_are_in_range_and_only_cover_min_minutes_players(con):
+    _need(con, "mls_player_percentiles", "mls_player_window")
+    out_of_range = _rows(con, "SELECT count(*) FROM mls_player_percentiles WHERE percentile NOT BETWEEN 0 AND 100")[0][0]
+    assert out_of_range == 0
+    not_eligible = _rows(con, """SELECT count(*) FROM mls_player_percentiles p JOIN mls_player_window w
+                                 USING (league, "window", asa_player_id) WHERE NOT w.meets_min_minutes""")[0][0]
+    assert not_eligible == 0
+    gk_attacking = _rows(con, """SELECT count(*) FROM mls_player_percentiles
+                                 WHERE position = 'GK' AND kpi <> 'goals_added'""")[0][0]
+    assert gk_attacking == 0
+
+
+def test_team_world_cup_counts_match_players(con):
+    _need(con, "mls_team_window", "mls_player_window")
+    sent = _rows(con, """SELECT league, sum(wc_players_sent) FROM mls_team_window WHERE "window" = 'pre' GROUP BY 1""")
+    players = dict(_rows(con, """SELECT league, count(*) FROM mls_player_window
+                                 WHERE "window" = 'pre' AND world_cup_player GROUP BY 1"""))
+    for league, n in sent:
+        assert n == players.get(league, 0), (league, n, players.get(league))
+
+
+# ------------------------------------------------------------------ exports
+@pytest.mark.parametrize("table", ["mls_player_window", "mls_player_change", "mls_player_percentiles",
+                                   "mls_team_window", "wc_nation_rounds"])
+def test_exports_match_their_mart(con, table):
+    import re
+
+    import pandas as pd
+    _need(con, table)
+    csv, xlsx = config.EXPORT_DIR / f"{table}.csv", config.EXPORT_DIR / f"{table}.xlsx"
+    if not csv.exists():
+        pytest.skip("exports not written yet (python -m etl.export)")
+    n = _rows(con, f"SELECT count(*) FROM {table}")[0][0]
+    cols = [r[0] for r in _rows(con, f"SELECT column_name FROM information_schema.columns "
+                                     f"WHERE table_name = '{table}' ORDER BY ordinal_position")]
+    c = pd.read_csv(csv)
+    assert len(c) == n and list(c.columns) == cols
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", col) for col in c.columns)
+    if xlsx.exists():
+        assert len(pd.read_excel(xlsx)) == n

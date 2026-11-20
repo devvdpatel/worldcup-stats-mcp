@@ -23,7 +23,7 @@ jobs:
         run: python -m compileall config.py etl mcp_server assistant
 
       - name: Import smoke test
-        run: python -c "import config, etl.load, etl.model, etl.extract, etl.fbref_meta, etl.asa, etl.xref, mcp_server.server, assistant.cli; print('imports OK')"
+        run: python -c "import config, etl.load, etl.model, etl.extract, etl.fbref_meta, etl.asa, etl.xref, etl.mls_model, etl.export, mcp_server.server, assistant.cli; print('imports OK')"
 
       - name: Tests (unit tests; warehouse data-quality tests skip without data/)
         run: python -m pytest

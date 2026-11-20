@@ -36,6 +36,14 @@ ASA_MIN_REQUEST_INTERVAL_S = 1.0         # polite spacing between live API reque
 # tournament and lasts at least this many days; otherwise split on the tournament dates.
 BREAK_MIN_GAP_DAYS = 14
 
+# --- MLS marts (etl/mls_model.py) ---------------------------------------------------
+# rows are never filtered on minutes; these thresholds only set the meets_min_minutes flags
+# (and the percentile peer pools). 450 = five full matches in a ~14-game half-season window.
+MIN_MINUTES_WINDOW = 450
+# World Cup rounds, earliest first (fbref `round` labels)
+WC_ROUND_ORDER = ["Group stage", "Round of 32", "Round of 16", "Quarter-finals",
+                  "Semi-finals", "Third-place match", "Final"]
+
 REVIEW_DIR = DATA_DIR / "review"         # hand-check files (player matching)
 # hand decisions on player matches (tracked in git, unlike data/): accept / reject rows
 MATCH_OVERRIDES_PATH = PROJECT_ROOT / "reference" / "player_match_overrides.csv"
