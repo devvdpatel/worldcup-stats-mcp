@@ -103,6 +103,25 @@ def test_override_reject_wins():
     assert not x.iloc[0]["is_accepted"]
 
 
+def test_review_file_keeps_hand_decisions_across_reruns(tmp_path):
+    x = _match([("c1", "Luis Suárez", "Colombia", "Sporting CP", "Portugal", 1, 1997)],
+               [("mls", "a1", "Luis Suárez", "Uruguay", "1987-01-24")],
+               [("mls", "a1", "t2")]).reset_index()
+    ev = pd.DataFrame({"asa_league": ["mls"], "asa_player_id": ["a1"],
+                       "mls_pre_minutes": [900], "mls_post_minutes": [1000]})
+    path = tmp_path / "review.csv"
+    xref.write_review(x, ev, path)
+    first = pd.read_csv(path, dtype=str).fillna("")
+    assert list(first.columns[:3]) == ["decision", "note", "review_reason"]
+    first.loc[0, ["decision", "note"]] = ["reject", "different player, born 1987"]
+    first.to_csv(path, index=False)
+    xref.write_review(x, ev, path)
+    again = pd.read_csv(path, dtype=str).fillna("")
+    assert again.loc[0, "decision"] == "reject"
+    assert again.loc[0, "note"] == "different player, born 1987"
+    assert again.loc[0, "mls_post_minutes"] == "1000"
+
+
 # ------------------------------------------------------------------ windows
 D = dt.date
 

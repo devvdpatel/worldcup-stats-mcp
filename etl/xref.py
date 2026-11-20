@@ -18,7 +18,9 @@ Outputs:
                          (confidence >= ACCEPT_AT, unambiguous, not overridden).
                          Only accepted rows drive the world_cup_player flag.
   data/review/player_match_review.csv - unmatched World Cup players at US clubs plus
-                         every low-confidence / ambiguous / conflicting link, for hand review.
+                         every low-confidence / ambiguous / conflicting link, for hand review,
+                         with World Cup and pre/post MLS minutes as evidence. `decision` and
+                         `note` typed into it survive re-runs.
   reference/player_match_overrides.csv (tracked, optional) - hand decisions:
                          fbref_player_id, asa_player_id, decision (accept|reject), note.
 """
@@ -206,6 +208,7 @@ def match_players(wc: pd.DataFrame, asa_players: pd.DataFrame, asa_player_teams:
             "fbref_club": w.club, "fbref_club_country": w.club_country,
             "fbref_club_tier": w.club_tier, "fbref_birth_year": w.birth_year,
             "fbref_club_asa_team_id": club_team, "fbref_club_league": club_league,
+            "wc_minutes": getattr(w, "minutes", None),
         }
         if not scored:
             rows.append({**base, "match_method": "unmatched", "confidence": 0.0, "n_candidates": 0})
@@ -284,11 +287,51 @@ FROM players p WHERE p.season = ?
 """
 
 
+REVIEW_PATH = config.REVIEW_DIR / "player_match_review.csv"
+
+# hand-review file: what to decide first, then the evidence, then the ids
+REVIEW_COLUMNS = [
+    "decision", "note", "review_reason",
+    "fbref_player", "nation", "fbref_club", "fbref_birth_year", "wc_minutes",
+    "asa_player_name", "asa_nationality", "asa_birth_year", "asa_teams_2026",
+    "mls_pre_minutes", "mls_post_minutes",
+    "match_method", "confidence", "is_accepted",
+    "name_similarity", "club_match", "nation_match", "birth_year_match",
+    "fbref_player_id", "asa_league", "asa_player_id",
+]
+
+
 def load_overrides() -> pd.DataFrame:
     path = config.MATCH_OVERRIDES_PATH
     if not path.exists():
         return pd.DataFrame(columns=["fbref_player_id", "asa_player_id", "decision", "note"])
     return pd.read_csv(path, dtype=str).fillna("")
+
+
+def _review_key(df: pd.DataFrame) -> pd.Series:
+    return df["fbref_player_id"].astype(str) + "|" + df["asa_player_id"].fillna("").astype(str)
+
+
+def write_review(x: pd.DataFrame, evidence: pd.DataFrame, path=None) -> pd.DataFrame:
+    """Write rows needing review. Decisions/notes already typed into an earlier version of
+    the file are carried over (matched on fbref_player_id + asa_player_id), so re-running
+    the pipeline never wipes hand review."""
+    path = path or REVIEW_PATH
+    review = x[x["needs_review"]].merge(evidence, on=["asa_league", "asa_player_id"], how="left")
+    review["decision"], review["note"] = "", ""
+    if path.exists():
+        old = pd.read_csv(path, dtype=str).fillna("")
+        if {"decision", "fbref_player_id", "asa_player_id"} <= set(old.columns):
+            if "note" not in old:
+                old["note"] = ""
+            kept = old[(old["decision"] != "") | (old["note"] != "")]
+            prev = dict(zip(_review_key(kept), zip(kept["decision"], kept["note"])))
+            keys = _review_key(review)
+            review["decision"] = [prev.get(k, ("", ""))[0] for k in keys]
+            review["note"] = [prev.get(k, ("", ""))[1] for k in keys]
+    review = review.sort_values(["is_accepted", "confidence"], ascending=[False, False])
+    review[REVIEW_COLUMNS].to_csv(path, index=False)
+    return review
 
 
 def build(con: duckdb.DuckDBPyConnection | None = None, season: str = config.CURRENT_SEASON) -> pd.DataFrame:
@@ -311,9 +354,12 @@ def build(con: duckdb.DuckDBPyConnection | None = None, season: str = config.CUR
         con.register("_x", x)
         con.execute("CREATE OR REPLACE TABLE player_xref AS SELECT * FROM _x")
         con.unregister("_x")
-        review = x[x["needs_review"]].copy()
-        review["decision"] = ""   # fill with accept / reject, then copy rows to the overrides file
-        review.to_csv(config.REVIEW_DIR / "player_match_review.csv", index=False)
+        evidence = con.execute("""
+            SELECT league AS asa_league, player_id AS asa_player_id,
+                   sum(minutes_played) FILTER ("window" = 'pre')  AS mls_pre_minutes,
+                   sum(minutes_played) FILTER ("window" = 'post') AS mls_post_minutes
+            FROM stg_asa_player_xgoals GROUP BY ALL""").df()
+        write_review(x, evidence)
         return x
     finally:
         if own:
