@@ -7,3 +7,6 @@ anthropic==0.109.1
 python-dotenv==1.2.2
 pandas==3.0.3
 cryptography==48.0.1
+# American Soccer Analysis API client (MLS / MLS NEXT Pro xG and goals added)
+itscalledsoccer==2.3.0
+polars==2.1.0

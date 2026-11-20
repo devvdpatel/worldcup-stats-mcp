@@ -1,10 +1,12 @@
 """Central configuration: paths, season, and league constants."""
+import os
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 SOCCERDATA_DIR = DATA_DIR / "soccerdata_cache"
-DUCKDB_PATH = DATA_DIR / "worldcup.duckdb"
+# WC_DUCKDB_PATH points the whole project at another warehouse file (tests, scratch copies)
+DUCKDB_PATH = Path(os.environ.get("WC_DUCKDB_PATH", DATA_DIR / "worldcup.duckdb"))
 
 # fbref / soccerdata
 LEAGUE = "INT-World Cup"
@@ -21,5 +23,23 @@ HISTORICAL_SEASONS = ["2022", "2018", "2014", "2010"]
 # (passing/defense/possession are league-only and raise a validation error).
 PLAYER_STAT_TYPES = ["standard", "shooting", "keeper", "playing_time", "misc"]
 
-for _d in (DATA_DIR, SOCCERDATA_DIR):
+# --- American Soccer Analysis (ASA) API, via the itscalledsoccer client -------------
+# MLS player/team xG, xA and goals added (g+) for the season the World Cup was played in.
+ASA_SEASON = "2026"
+ASA_LEAGUES = ["mls", "mlsnp"]          # mls is required; mlsnp (MLS NEXT Pro) is optional
+ASA_REQUIRED_LEAGUES = ["mls"]
+ASA_STAGE = "Regular Season"
+ASA_CACHE_DIR = DATA_DIR / "asa_cache"   # raw JSON responses, one file per request
+ASA_CACHE_MAX_AGE_DAYS = 7               # re-download older responses (or pass --refresh)
+ASA_MIN_REQUEST_INTERVAL_S = 1.0         # polite spacing between live API requests
+# A gap in a league's game dates counts as its World Cup break if it overlaps the
+# tournament and lasts at least this many days; otherwise split on the tournament dates.
+BREAK_MIN_GAP_DAYS = 14
+
+REVIEW_DIR = DATA_DIR / "review"         # hand-check files (player matching)
+# hand decisions on player matches (tracked in git, unlike data/): accept / reject rows
+MATCH_OVERRIDES_PATH = PROJECT_ROOT / "reference" / "player_match_overrides.csv"
+EXPORT_DIR = DATA_DIR / "exports"        # CSVs for Tableau Public
+
+for _d in (DATA_DIR, SOCCERDATA_DIR, ASA_CACHE_DIR, REVIEW_DIR, EXPORT_DIR):
     _d.mkdir(parents=True, exist_ok=True)
