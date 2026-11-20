@@ -103,6 +103,20 @@ def test_override_reject_wins():
     assert not x.iloc[0]["is_accepted"]
 
 
+def test_override_accept_keeps_note_and_clears_evidence_for_a_different_player():
+    ov = pd.DataFrame([{"fbref_player_id": "c1", "asa_player_id": "a9", "decision": "accept",
+                        "note": "hand-verified"}])
+    x = _match([("c1", "Luis Suárez", "Colombia", "Sporting CP", "Portugal", 1, 1997)],
+               [("mls", "a1", "Luis Suárez", "Uruguay", "1987-01-24")],
+               [("mls", "a1", "t2")])
+    x = xref._finalize(x.reset_index().drop(columns=["ambiguous", "conflict", "override", "override_note",
+                                                      "is_accepted", "review_reason", "needs_review"]), ov)
+    r = x.iloc[0]
+    assert r["is_accepted"] and r["asa_player_id"] == "a9" and r["override_note"] == "hand-verified"
+    assert r["match_method"] == "manual_override" and pd.isna(r["asa_player_name"])
+    assert not r["needs_review"]
+
+
 def test_review_file_keeps_hand_decisions_across_reruns(tmp_path):
     x = _match([("c1", "Luis Suárez", "Colombia", "Sporting CP", "Portugal", 1, 1997)],
                [("mls", "a1", "Luis Suárez", "Uruguay", "1987-01-24")],

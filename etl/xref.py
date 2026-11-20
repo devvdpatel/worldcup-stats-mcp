@@ -240,15 +240,25 @@ def _finalize(x: pd.DataFrame, overrides: pd.DataFrame | None = None) -> pd.Data
     x["conflict"] = False
     x.loc[dup.index, "conflict"] = dup > 1
     x["override"] = None
+    x["override_note"] = None
     if overrides is not None and not overrides.empty:
         for o in overrides.itertuples():
             m = x["fbref_player_id"].eq(o.fbref_player_id)
-            if str(o.decision).strip().lower() == "accept":
-                x.loc[m, "override"] = "accept"
-                if isinstance(o.asa_player_id, str) and o.asa_player_id:
-                    x.loc[m, "asa_player_id"] = o.asa_player_id
-            elif str(o.decision).strip().lower() == "reject":
-                x.loc[m, "override"] = "reject"
+            decision = str(o.decision).strip().lower()
+            if decision not in ("accept", "reject"):
+                continue
+            x.loc[m, "override"] = decision
+            x.loc[m, "override_note"] = getattr(o, "note", None) or None
+            new_id = o.asa_player_id if isinstance(o.asa_player_id, str) else ""
+            if decision == "accept" and new_id and m.any() and (x.loc[m, "asa_player_id"] != new_id).any():
+                # hand-picked a different ASA player: the matcher's evidence no longer applies
+                x.loc[m, "asa_player_id"] = new_id
+                x.loc[m, "match_method"] = "manual_override"
+                for col in ("asa_player_name", "asa_nationality", "asa_birth_year", "asa_teams_2026",
+                            "name_similarity", "club_match", "nation_match", "birth_year_match"):
+                    if col in x:
+                        x[col] = x[col].astype(object)   # pandas 3: typed columns reject None
+                        x.loc[m, col] = None
     x["is_accepted"] = (linked & ~x["ambiguous"] & ~x["conflict"] & x["override"].ne("reject")) | \
         x["override"].eq("accept")
 
