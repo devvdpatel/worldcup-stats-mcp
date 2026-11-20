@@ -10,6 +10,9 @@ Politeness / resilience:
   * `CACHE_ONLY = True` (pipeline `--cache-only`) never contacts fbref: a page that is
     not already in data/soccerdata_cache raises NotCachedError and that season/table
     is skipped. Use it when fbref is rate-limiting or showing a bot challenge.
+  * circuit breaker: the first page that fbref refuses (soccerdata gives up after its
+    own retries) switches the rest of the run to cache-only, so a block or bot check
+    is never hammered with further requests.
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ _TEAM_PAGE = {"standard": "stats", "keeper": "keepers", "playing_time": "playing
               "shooting": "shooting", "misc": "misc"}
 
 _READER: sd.FBref | None = None
+BLOCKED: str | None = None  # set to the error text once fbref refuses a page this run
 
 
 class NotCachedError(FileNotFoundError):
@@ -35,11 +39,22 @@ class NotCachedError(FileNotFoundError):
 
 
 def _require_cached(*files: str) -> None:
-    if not CACHE_ONLY:
+    if not (CACHE_ONLY or BLOCKED):
         return
     missing = [f for f in files if not (Path(config.SOCCERDATA_DIR) / f).exists()]
     if missing:
-        raise NotCachedError(f"cache-only mode and not cached: {', '.join(missing)}")
+        why = "cache-only mode" if CACHE_ONLY else "fbref refused an earlier page this run"
+        raise NotCachedError(f"{why} and not cached: {', '.join(missing)}")
+
+
+def _guard(fetch):
+    """Run a soccerdata read; if fbref refuses a page, trip the circuit breaker."""
+    global BLOCKED
+    try:
+        return fetch()
+    except ConnectionError as exc:  # soccerdata: "Could not download <url>." after retries
+        BLOCKED = str(exc)
+        raise
 
 
 def _reader(seasons) -> sd.FBref:
@@ -77,21 +92,21 @@ def extract_schedule(seasons):
     """Match schedule + results for the given season(s)."""
     for s in _as_list(seasons):
         _require_cached(f"teams_{_lg()}_{s}.html", f"schedule_{_lg()}_{s}.html")
-    return _reader(seasons).read_schedule()
+    return _guard(lambda: _reader(seasons).read_schedule())
 
 
 def extract_player_season_stats(seasons, stat_type: str):
     """Player season-stats table (stat_type e.g. 'standard', 'shooting', 'keeper')."""
     for s in _as_list(seasons):
         _require_cached(f"players_{_lg()}_{s}_{_PLAYER_PAGE.get(stat_type, stat_type)}.html")
-    return _reader(seasons).read_player_season_stats(stat_type=stat_type)
+    return _guard(lambda: _reader(seasons).read_player_season_stats(stat_type=stat_type))
 
 
 def extract_team_season_stats(seasons, stat_type: str):
     """Team season-stats table."""
     for s in _as_list(seasons):
         _require_cached(f"teams_{_lg()}_{s}_{_TEAM_PAGE.get(stat_type, stat_type)}.html")
-    return _reader(seasons).read_team_season_stats(stat_type=stat_type)
+    return _guard(lambda: _reader(seasons).read_team_season_stats(stat_type=stat_type))
 
 
 def _as_list(seasons) -> list[str]:

@@ -43,11 +43,14 @@ def _gather(seasons: list[str], fetch, label: str) -> pd.DataFrame | None:
     return pd.concat(frames, ignore_index=True)
 
 
-def _save(df: pd.DataFrame | None, table: str, con, replace: bool) -> None:
+def _save(df: pd.DataFrame | None, table: str, replace: bool) -> None:
+    """Write one table. The DuckDB connection is opened only for the write, so a long
+    scrape doesn't hold the warehouse's write lock between pages."""
     if df is None:
         print(f"  -> {table}: nothing loaded (kept existing rows)")
         return
-    n = load.load_dataframe(df, table, con) if replace else load.upsert_partitions(df, table, con)
+    with duckdb.connect(str(config.DUCKDB_PATH)) as con:
+        n = load.load_dataframe(df, table, con) if replace else load.upsert_partitions(df, table, con)
     print(f"  -> {table}: {n} rows total")
 
 
@@ -60,27 +63,25 @@ def run(seasons: list[str], stat_types: list[str], replace: bool = False) -> Non
     """
     mode = "replace" if replace else "upsert by season"
     print(f"ETL: seasons {seasons}, stats {stat_types}, {mode} -> {config.DUCKDB_PATH}")
-    con = duckdb.connect(str(config.DUCKDB_PATH))
     try:
         print("[schedule]")
-        _save(_gather(seasons, extract.extract_schedule, "schedule"), "stg_schedule", con, replace)
+        _save(_gather(seasons, extract.extract_schedule, "schedule"), "stg_schedule", replace)
 
         for st in stat_types:
             print(f"[player:{st}]")
             df = _gather(seasons, lambda s, _st=st: extract.extract_player_season_stats(s, _st), st)
-            _save(df, f"stg_player_{st}", con, replace)
+            _save(df, f"stg_player_{st}", replace)
 
         if "standard" in stat_types:
             # fbref player ids + club country/tier, re-parsed from the cached standard page
             print("[player:meta]")
-            _save(_gather(seasons, fbref_meta.parse_player_meta, "meta"), "stg_player_meta", con, replace)
+            _save(_gather(seasons, fbref_meta.parse_player_meta, "meta"), "stg_player_meta", replace)
 
         for st in stat_types:
             print(f"[team:{st}]")
             df = _gather(seasons, lambda s, _st=st: extract.extract_team_season_stats(s, _st), f"team:{st}")
-            _save(df, f"stg_team_{st}", con, replace)
+            _save(df, f"stg_team_{st}", replace)
     finally:
-        con.close()
         extract.close()
     print("ETL complete.")
 
